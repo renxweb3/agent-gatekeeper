@@ -64,7 +64,7 @@ function decide(input) {
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify({ ok: true, version: process.env.GIT_COMMIT_SHA || 'v3', secretSet: !!SECRET, secretFp: crypto.createHash('sha256').update(SECRET).digest('hex').slice(0, 16) }));
+    return res.end(JSON.stringify({ ok: true, version: process.env.GIT_COMMIT_SHA || 'v4', source: process.env.GATEKEEPER_HMAC_SECRET ? 'GATEKEEPER_HMAC_SECRET' : (process.env.AGENT_GAMES_HMAC_SECRET ? 'AGENT_GAMES_HMAC_SECRET' : 'NONE'), secretSet: !!SECRET, secretFp: crypto.createHash('sha256').update(SECRET).digest('hex').slice(0, 16) }));
   }
   const chunks = [];
   req.on('data', (c) => chunks.push(c));
