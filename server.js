@@ -84,7 +84,37 @@ const server = http.createServer((req, res) => {
         result.proof_tx = (body.input || {}).proof_tx;
         return sendSigned(res, 200, result);
       }
-      return sendSigned(res, 400, { ok: false, error: 'unknown_task_type' });
+      if (body.type === 'agent-games.steal-the-vfy.v1' || /steal|vfy|turn|match|strategy|commit/i.test(body.type || '')) {
+        console.log('[STFV-IN]', raw);
+        const inp = body.input || body;
+        const turn = Number(inp.turn ?? inp.turn_number ?? inp.turnNumber ?? 0);
+        const selfBal = BigInt(inp.self_balance ?? inp.selfBalance ?? inp.balance ?? 100);
+        const oppBal = BigInt(inp.opponent_balance ?? inp.opponentBalance ?? 100);
+        // Adaptive-ish deterministic strategy (private logic): pressure early, protect when rich.
+        let action = 'HOLD';
+        let amount = 0;
+        if (oppBal > 0n && turn % 3 !== 2) {
+          action = 'EXTRACT';
+          amount = Number(oppBal > 20n ? 20n : oppBal);
+        } else if (selfBal > 60n) {
+          action = 'FORTIFY';
+          amount = 10;
+        }
+        const h = require('js-sha3');
+        const hash = h.keccak256(Buffer.concat([
+          Buffer.from(String(inp.strategy_commitment ?? inp.strategyCommitment ?? '0'), 'utf8'),
+          Buffer.from(String(inp.match_id ?? inp.matchId ?? '0'), 'utf8'),
+          Buffer.from(String(turn), 'utf8'),
+          Buffer.from(String(selfBal), 'utf8'),
+          Buffer.from(String(oppBal), 'utf8'),
+          Buffer.from(String(action), 'utf8'),
+        ]));
+        const resp = { action, amount, publicInputsHash: '0x' + hash, task_id: body.task_id };
+        console.log('[STFV-OUT]', JSON.stringify(resp));
+        return sendSigned(res, 200, resp);
+      }
+      console.log('[UNKNOWN-TASK]', body.type || '(no type)', raw.slice(0, 2000));
+      return sendSigned(res, 200, { ok: false, error: 'unknown_task_type', received_type: body.type });
     } catch (e) {
       return sendSigned(res, 200, { decision: 'REJECT', reason_code: 'PROCESSING_ERROR', error: e.message });
     }
