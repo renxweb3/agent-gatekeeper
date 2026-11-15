@@ -10,7 +10,7 @@ const http = require('http');
 const crypto = require('crypto');
 
 const PORT = process.env.PORT || 8080;
-const SECRET = process.env.AGENT_GAMES_HMAC_SECRET || '';
+const SECRET = (process.env.AGENT_GAMES_HMAC_SECRET || '').trim();
 const GATEKEEPER_VK_HASH = process.env.GATEKEEPER_VK_HASH ||
   '0x6b79c6012a6d8651f3e13bc4d2a20370280ab49700c90c5316d4168bfbad77b0';
 
