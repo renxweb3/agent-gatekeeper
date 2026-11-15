@@ -62,6 +62,10 @@ function decide(input) {
 }
 
 const server = http.createServer((req, res) => {
+  if (req.method === 'GET' && req.url === '/health') {
+    res.writeHead(200, { 'content-type': 'application/json' });
+    return res.end(JSON.stringify({ ok: true, version: process.env.GIT_COMMIT_SHA || 'v2-trim', secretSet: !!process.env.AGENT_GAMES_HMAC_SECRET }));
+  }
   const chunks = [];
   req.on('data', (c) => chunks.push(c));
   req.on('end', () => {
