@@ -69,6 +69,28 @@ function decideGatekeeper(input) {
 }
 
 // ---------- Steal the VFY ----------
+// ---- Gatekeeper ZK proof (Groth16, BN254 field) --------------------------
+const FIELD = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+async function proveGatekeeper(task, decision) {
+  const i = task.input || {};
+  const fieldOf = (s) => (BigInt(s) % FIELD).toString();
+  const uintOf = (v) => BigInt(v).toString();
+  const taskIdField = (BigInt('0x' + crypto.createHash('sha256').update(String(task.task_id || '')).digest('hex')) % FIELD).toString();
+  const salt = (BigInt('0x' + crypto.createHmac('sha256', SECRET).update('gatekeeper-proof-salt-v1:' + task.mode + ':' + task.task_id).digest('hex')) % FIELD).toString();
+  const wit = {
+    registeredVkHash: fieldOf(i.registered_vk), proofVkHash: fieldOf(i.proof_vk),
+    minimum: uintOf(i.minimum), publicBalance: uintOf(i.public_balance),
+    expiryBlock: uintOf(i.expiry_block), currentBlock: uintOf(i.current_block),
+    recipient: fieldOf(i.recipient), conditionRecipient: fieldOf(i.condition_recipient),
+    amount: uintOf(i.amount), maxTransfer: uintOf(i.max_transfer),
+    decision: decision.decision === 'APPROVE' ? '1' : '0', taskId: taskIdField, salt,
+  };
+  const snarkjs = require('snarkjs');
+  const { proof, publicSignals } = await snarkjs.groth16.fullProve(
+    wit, path.join(__dirname, 'gatekeeper.wasm'), path.join(__dirname, 'gatekeeper_final.zkey'));
+  return { proof, publicSignals };
+}
+
 // Circuit-enforced decision list (must match vfy-policy exactly):
 //   1. FORTIFY when selfBalance < params[1]
 //   2. else HOLD when opponentBalance <= params[2] OR params[3] == 1
@@ -183,7 +205,7 @@ const server = http.createServer((req, res) => {
   }
   const chunks = [];
   req.on('data', (c) => chunks.push(c));
-  req.on('end', () => {
+  req.on('end', async () => {
     const raw = Buffer.concat(chunks).toString('utf8');
     try {
       if (!verifySig(raw, req.headers['x-agent-games-signature'])) {
@@ -197,6 +219,14 @@ const server = http.createServer((req, res) => {
         const result = decideGatekeeper(body.input || {});
         result.task_id = body.task_id;
         result.proof_tx = (body.input || {}).proof_tx;
+        try {
+          const { proof, publicSignals } = await proveGatekeeper(body, result);
+          result.proof = proof;
+          result.public_signals = publicSignals;
+        } catch (e) {
+          console.log('[GK-PROOF-FAIL]', String(e.message || e).slice(0, 200));
+          result.proof_error = 'proof_generation_failed';
+        }
         return sendSigned(res, 200, result);
       }
       if (body.eventId === 'steal-the-vfy') {
