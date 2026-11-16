@@ -131,8 +131,14 @@ function makeVfyProof(envelope, action, amount) {
   return p;
 }
 
-async function handleVfyTurn(res, envelope, idemKey) {
-  const cacheKey = idemKey || `${envelope.matchId}:${envelope.turn}`;
+async function handleVfyTurn(res, envelope, idemKeyRaw) {
+  // idempotencyKey must be a UUID: derive a deterministic UUID from match+turn when the platform omits it
+  const deriveUuid = () => {
+    const h = crypto.createHash('sha256').update(`${envelope.matchId}:${envelope.turn}`).digest('hex');
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-a${h.slice(17, 20)}-${h.slice(20, 32)}`;
+  };
+  const cacheKey = (idemKeyRaw && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idemKeyRaw))
+    ? idemKeyRaw : deriveUuid();
   if (idemCache.has(cacheKey)) {
     return sendSigned(res, 200, idemCache.get(cacheKey));
   }
