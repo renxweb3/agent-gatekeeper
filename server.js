@@ -91,6 +91,45 @@ async function proveGatekeeper(task, decision) {
   return { proof, publicSignals };
 }
 
+// ---- Kurier on-chain submission (zkVerify) ------------------------------
+const KURIER_API_KEY = (process.env.KURIER_API_KEY || '').trim();
+const KURIER_URL = 'https://api.kurier.xyz/api/v1';
+const VFY_VK_HASH = '0x6c56509f1c56fd1fd4e9737f906d2220f4b95f1d507f1adf6899085bd74be047';
+const kurierStats = { submitted: 0, finalized: 0, failed: 0, lastTx: null };
+
+async function kurierSubmit(proof, publicSignals, vkHash) {
+  if (!KURIER_API_KEY) return null;
+  const body = JSON.stringify({ proofType: 'groth16', vkRegistered: true,
+    proofOptions: { library: 'snarkjs', curve: 'bn128' },
+    proofData: { vk: vkHash, proof, publicSignals } });
+  const r = await fetch(`${KURIER_URL}/submit-proof/${KURIER_API_KEY}`,
+    { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+  const j = await r.json();
+  if (!j.jobId) throw new Error('kurier_no_jobid: ' + JSON.stringify(j).slice(0, 200));
+  kurierStats.submitted++;
+  return j.jobId;
+}
+
+async function kurierWaitTx(jobId, timeoutMs = 25000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    await new Promise(r => setTimeout(r, 4000));
+    const r = await fetch(`${KURIER_URL}/job-status/${KURIER_API_KEY}/${jobId}`);
+    const j = await r.json();
+    if (j.txHash) { kurierStats.finalized++; kurierStats.lastTx = j.txHash; return j.txHash; }
+    if (j.status === 'Failed') { kurierStats.failed++; return null; }
+  }
+  return null;
+}
+
+// Fire-and-forget: submit + wait, record tx, never blocks the response.
+function kurierBackground(proof, publicSignals, vkHash, tag) {
+  if (!KURIER_API_KEY) return;
+  kurierSubmit(proof, publicSignals, vkHash)
+    .then(jobId => kurierWaitTx(jobId).then(tx => console.log(`[KURIER] ${tag} job=${jobId} tx=${tx || 'pending'}`)))
+    .catch(e => { kurierStats.failed++; console.log('[KURIER-FAIL]', tag, String(e.message || e).slice(0, 200)); });
+}
+
 // Circuit-enforced decision list (must match vfy-policy exactly):
 //   1. FORTIFY when selfBalance < params[1]
 //   2. else HOLD when opponentBalance <= params[2] OR params[3] == 1
@@ -147,6 +186,7 @@ function makeVfyProof(envelope, action, amount) {
     const started = Date.now();
     const { proof, publicSignals } = await snarkjs.groth16.fullProve(inputs, VFY_WASM, VFY_ZKEY);
     console.log(`[VFY-PROOF] turn=${envelope.turn} action=${action.type} amount=${amount} ms=${Date.now() - started}`);
+    kurierBackground(proof, publicSignals, VFY_VK_HASH, `vfy:${envelope.matchId}:t${envelope.turn}`);
     return { proof, publicSignals };
   });
   proofChain = p.catch(() => {});
@@ -200,8 +240,9 @@ async function handleVfyTurn(res, envelope, idemKeyRaw) {
 const server = http.createServer((req, res) => {
   if (req.method === 'GET' && req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    return res.end(JSON.stringify({ ok: true, version: 'v5', secretSet: !!SECRET,
-      strategy: STRATEGY_COMMITMENT ? STRATEGY_COMMITMENT.slice(0, 10) + '…' : 'unset' }));
+    return res.end(JSON.stringify({ ok: true, version: 'v6', secretSet: !!SECRET,
+      strategy: STRATEGY_COMMITMENT ? STRATEGY_COMMITMENT.slice(0, 10) + '…' : 'unset',
+      kurier: kurierStats }));
   }
   const chunks = [];
   req.on('data', (c) => chunks.push(c));
@@ -223,6 +264,7 @@ const server = http.createServer((req, res) => {
           const { proof, publicSignals } = await proveGatekeeper(body, result);
           result.proof = proof;
           result.public_signals = publicSignals;
+          kurierBackground(proof, publicSignals, GATEKEEPER_VK_HASH, 'gk:' + body.task_id);
         } catch (e) {
           console.log('[GK-PROOF-FAIL]', String(e.message || e).slice(0, 200));
           result.proof_error = 'proof_generation_failed';
