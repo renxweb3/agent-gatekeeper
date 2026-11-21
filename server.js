@@ -75,7 +75,13 @@ async function proveGatekeeper(task, decision) {
   const i = task.input || {};
   const fieldOf = (s) => (BigInt(s) % FIELD).toString();
   const uintOf = (v) => BigInt(v).toString();
-  const taskIdField = (BigInt('0x' + crypto.createHash('sha256').update(String(task.task_id || '')).digest('hex')) % FIELD).toString();
+  const extractUuidField = (s) => {
+    const m = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(String(s || ''));
+    if (m) return BigInt('0x' + m[1].replace(/-/g, '')).toString();
+    return null;
+  };
+  const taskIdField = extractUuidField(task.task_id)
+    || (BigInt('0x' + crypto.createHash('sha256').update(String(task.task_id || '')).digest('hex')) % FIELD).toString();
   const salt = (BigInt('0x' + crypto.createHmac('sha256', SECRET).update('gatekeeper-proof-salt-v1:' + task.mode + ':' + task.task_id).digest('hex')) % FIELD).toString();
   const wit = {
     registeredVkHash: fieldOf(i.registered_vk), proofVkHash: fieldOf(i.proof_vk),
@@ -216,7 +222,7 @@ async function handleVfyTurn(res, envelope, idemKeyRaw) {
     if (STRATEGY_SALT && STRATEGY_COMMITMENT) {
       const { proof, publicSignals } = await makeVfyProof(envelope, action, amount);
       policyProof.proof = proof;
-      policyProof.publicSignals = publicSignals;
+      policyProof.public_signals = publicSignals;
     } else {
       console.log('[VFY] salt/commitment missing — no proof (fail closed)');
     }
